@@ -46,8 +46,6 @@ class BooksUploadController extends AbstractController
                             $i++;
                             $bookId = (int)$getData[0];
 
-                            if ($bookId < 1403661) continue;
-              
                             $existingBook = FALSE;
                             if (!empty($bookId)) {
                               $existingBook = $bookRepository->findBy(['id' => $bookId]);
