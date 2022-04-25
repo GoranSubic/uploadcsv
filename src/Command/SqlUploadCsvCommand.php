@@ -2,9 +2,11 @@
 
 namespace App\Command;
 
+use App\Service\UploadCsvContent;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Filesystem\Filesystem;
@@ -18,71 +20,80 @@ use Symfony\Component\HttpKernel\KernelInterface;
 )]
 class SqlUploadCsvCommand extends Command
 {
-    protected static $defaultName = 'app:sql-upload-csv-data';
+  protected static $defaultName = 'app:sql-upload-csv-data';
 
-    protected static $defaultDescription = 'SQL uploads data from brd.csv file to db.';
+  protected static $defaultDescription = 'SQL uploads data from brd.csv file to db.';
 
-    protected $projectDir;
+  protected $projectDir;
 
-    protected $entityManager;
+  protected $entityManager;
 
-    public function __construct(KernelInterface $kernel, EntityManagerInterface $entityManager)
-    {
-        parent::__construct();
-        $this->projectDir = $kernel->getProjectDir();
-        $this->entityManager = $entityManager;
-    }
+  protected $uploadCsvContent;
 
-    protected function configure(): void
-    {
-      $this
-          ->setHelp('This command allows you to upload data from csv file named brd.csv')
-      ;
-    }
+  public function __construct(KernelInterface $kernel, EntityManagerInterface $entityManager, UploadCsvContent $uploadCsvContent)
+  {
+      parent::__construct();
+      $this->projectDir = $kernel->getProjectDir();
+      $this->entityManager = $entityManager;
+      $this->uploadCsvContent = $uploadCsvContent;
+  }
 
-    protected function execute(InputInterface $input, OutputInterface $output): int
-    {
-      $output->writeln([
-          'Uploads data to db',
-          '==================',
+  protected function configure(): void
+  {
+    $this
+        ->setHelp('This command allows you to upload data from csv file named brd.csv')
+    ;
+  }
+
+  protected function execute(InputInterface $input, OutputInterface $output): int
+  {
+    $progressBar = new ProgressBar($output, 2);
+    $output->writeln([
+        'Uploads data to db',
+        '==================',
+        '',
+    ]);
+
+    $destination = $this->projectDir.'/public/uploads';
+    $fileName = 'brd.csv';
+    $file = $destination . '/' . $fileName;
+
+    $filesystem = new Filesystem();
+    // Import file content to db.
+    if($filesystem->exists($destination) && $filesystem->exists([$file])) {
+      if (($handle = fopen($file, "r")) !== FALSE) {
+        $output->writeln([
           '',
-      ]);
+          '<comment>Starting with filling data to BookStrings.</comment>',
+          '',
+        ]);
 
-      $destination = $this->projectDir.'/public/uploads';
-      $fileName = 'brd.csv';
-      $file = $destination . '/' . $fileName;
+        $progressBar->start();
+        // $progressBar->clear();
+        // $progressBar->advance();
+        // $progressBar->display();
+        
+        $messageArray = [];
+        $lastImportedBookId = $this->uploadCsvContent->contentToDb($handle, $messageArray);
 
-      $filesystem = new Filesystem();
-      // Import file content to db.
-      if($filesystem->exists($destination) && $filesystem->exists([$file])) {
-        if (($handle = fopen($file, "r")) !== FALSE) {
-          $i = 0;
-          while (($getData = fgetcsv($handle, 10000, ",")) !== FALSE) {
-              $i++;
-              $bookId = $getData[0];
+        $progressBar->advance();
 
-              $sql = "INSERT INTO book_strings (id, series, number, name, type, publisher, author, price, release_date) 
-              VALUES (:id, :series, :number, :name, :type, :publisher, :author, :price, :release_date)";
-              $stmt = $this->entityManager->getConnection()->prepare($sql);
-              $r = $stmt->execute([
-                'id' => $getData[0],
-                'series' => $getData[1],
-                'number' => $getData[2],
-                'name' => $getData[3],
-                'type' => $getData[4],
-                'publisher' => $getData[5],
-                'author' => $getData[6],
-                'price' => $getData[7],
-                'release_date' => !empty($getData[8]) ? $getData[8] : '',
-              ]);
-
-              if (!$r) {
-                $output->writeln('<comment>An error occured for book id: </comment>' . $bookId);
-              }
-          }
+        if (!empty($messageArray['skipped_id'])) {
+          $bookIds = implode(", ", $messageArray['skipped_id']);
+          $output->writeln([
+            '',
+            '<comment>An error occured for book id: </comment>' . $bookIds,
+            '',
+          ]);
         }
-  
-        $output->writeln('Last imported book with id: ' . $bookId);
+
+        if (!empty($lastImportedBookId)) {
+          $output->writeln([
+            '',
+            'Last imported book in "strings" table with id: ' . $lastImportedBookId,
+            '',
+          ]);
+        }
 
         fclose($handle);
         return Command::SUCCESS;
@@ -91,4 +102,5 @@ class SqlUploadCsvCommand extends Command
       $output->writeln('File do not exist!');
       return Command::FAILURE;
     }
+  }
 }

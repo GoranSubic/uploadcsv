@@ -9,13 +9,13 @@ use App\Repository\AuthorRepository;
 use App\Repository\BookRelationalRepository;
 use App\Repository\BookStringsRepository;
 use App\Repository\PublisherRepository;
+use App\Service\UploadCsvContent;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\HttpKernel\KernelInterface;
 
@@ -43,13 +43,16 @@ class RelationalUploadCsvCommand extends Command
 
     protected $authorRepository;
 
+    protected $uploadCsvContent;
+
     public function __construct(
       KernelInterface $kernel, 
       EntityManagerInterface $entityManager, 
       BookStringsRepository $bookStringsRepository,
       BookRelationalRepository $bookRelationalRepository,
       PublisherRepository $publisherRepository,
-      AuthorRepository $authorRepository)
+      AuthorRepository $authorRepository,
+      UploadCsvContent $uploadCsvContent)
     {
         parent::__construct();
         $this->projectDir = $kernel->getProjectDir();
@@ -58,6 +61,7 @@ class RelationalUploadCsvCommand extends Command
         $this->bookRelationalRepository = $bookRelationalRepository;
         $this->publisherRepository = $publisherRepository;
         $this->authorRepository = $authorRepository;
+        $this->uploadCsvContent = $uploadCsvContent;
     }
 
     protected function configure(): void
@@ -85,8 +89,6 @@ class RelationalUploadCsvCommand extends Command
       if($filesystem->exists($destination) && $filesystem->exists([$file])) {
         if (($handle = fopen($file, "r")) !== FALSE) {
 
-          $this->bookStringsRepository->trancateTable();
-
           $output->writeln([
             '',
             '<comment>Starting with filling data to BookStrings.</comment>',
@@ -94,49 +96,34 @@ class RelationalUploadCsvCommand extends Command
           ]);
 
           $progressBar->start();
-          $progressBar->advance();
-          $progressBar->clear();
-          $progressBar->display();
+          // $progressBar->advance();
+          // $progressBar->clear();
+          // $progressBar->display();
           
-          while (($getData = fgetcsv($handle, 10000, ",")) !== FALSE) {
-              $bookId = $getData[0];
+          $messageArray = [];
+          $lastImportedBookId = $this->uploadCsvContent->contentToDb($handle, $messageArray);
 
-              $sql = "INSERT INTO book_strings (id, series, number, name, type, publisher, author, price, release_date) 
-              VALUES (:id, :series, :number, :name, :type, :publisher, :author, :price, :release_date)";
-              $stmt = $this->entityManager->getConnection()->prepare($sql);
-              $r = $stmt->execute([
-                'id' => $getData[0],
-                'series' => $getData[1],
-                'number' => $getData[2],
-                'name' => $getData[3],
-                'type' => $getData[4],
-                'publisher' => $getData[5],
-                'author' => $getData[6],
-                'price' => $getData[7],
-                'release_date' => !empty($getData[8]) ? $getData[8] : '',
-              ]);
+          $progressBar->advance();
 
-              if (!$r) {
-                $output->writeln([
-                  '',
-                  '<comment>An error occured for book id: </comment>' . $bookId,
-                  '',
-                ]);
-              }
+          if (!empty($messageArray['skipped_id'])) {
+            $bookIds = implode(", ", $messageArray['skipped_id']);
+            $output->writeln([
+              '',
+              '<comment>An error occured for book id: </comment>' . $bookIds,
+              '',
+            ]);
           }
-  
-          $output->writeln([
-            '',
-            'Last imported book in "strings" table with id: ' . $bookId,
-            '',
-          ]);
+
+          if (!empty($lastImportedBookId)) {
+            $output->writeln([
+              '',
+              'Last imported book in "strings" table with id: ' . $lastImportedBookId,
+              '',
+            ]);
+          }
 
           fclose($handle);
           
-          // $progressBar->clear();
-          // $progressBar->advance();
-          // $progressBar->display();
-
           $output->writeln([
             '',
             '<comment>Starting with filling data to BookRelational, Publisher and Author tables.</comment>',
